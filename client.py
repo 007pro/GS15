@@ -1,5 +1,8 @@
+import os
+
 from classes import User, Server
 from os.path import exists
+from os import listdir
 import pickle
 
 def display_menu():
@@ -8,7 +11,6 @@ def display_menu():
     print("2. Log in")
     print("3. List all users")
     print("4. Quit")
-    print("7. Test procedure")
 
 def main():
     while True:
@@ -22,7 +24,7 @@ def main():
             else :
                 user = server.createUser(id)
                 print("User created")
-            pass
+
         # Log in user
         elif choice == "2":
             id = input("Enter username: ")
@@ -31,29 +33,15 @@ def main():
                 loggedMenu(currentUser)
             else :
                 print("Invalid username, please try again")
-            pass
+
         # List all users
         elif choice == "3":
             f = open("serverdata/users.txt", "r")
             for line in f:
                 print(line)
             f.close()
-            pass
-        elif choice == "7":
-            alice = server.loadUser("alice")
-            bob = server.loadUser("bob")
-            alice.ratchetInitFirst("bob", server.g, server.p)
-            bob.ratchetInitSecond("alice", server.g, server.p)
-            header, ciphertext = alice.RatchetEncrypt("bob", b'Bonjour a tous')
-            header2, ciphertext2 = alice.RatchetEncrypt("bob", b'Bonjour a tou')
-            header3, ciphertext3 = alice.RatchetEncrypt("bob", b'Bonjour a to')
-            header4, ciphertext4 = alice.RatchetEncrypt("bob", b'Bonjour a t')
-            print(bob.RatchetDecrypt("alice",header,ciphertext, server.g, server.p))
-            print(bob.RatchetDecrypt("alice", header2, ciphertext2, server.g, server.p))
-            print(bob.RatchetDecrypt("alice", header3, ciphertext3, server.g, server.p))
-            print(bob.RatchetDecrypt("alice", header4, ciphertext4, server.g, server.p))
-            header, ciphertext = bob.RatchetEncrypt("alice", b'Yo comment')
-            print(alice.RatchetDecrypt("bob",header,ciphertext, server.g, server.p))
+
+        #Quit
         elif choice == "4":
             break
         else:
@@ -61,14 +49,42 @@ def main():
 
 def loggedMenu(cuser):
     while True:
+        #Load all new messages on connection
+        if(exists("serverdata/messages/"+cuser.uid)) :
+            print("!!! New messages !!!")
+            for sendername in listdir("serverdata/messages/"+cuser.uid) :
+                for i in range(len(listdir("serverdata/messages/"+cuser.uid+"/"+sendername))//2) :
+                    if not (exists("serverdata/messages/"+sendername+"/"+cuser.uid)) :
+                        cuser.ratchetInitSecond(sendername, server.g, server.p)
+                    i+=1
+                    while not(exists("serverdata/messages/" + cuser.uid + "/" + sendername + "/message_"+ str(i))) :
+                        i+=1
+                    with open("serverdata/messages/" + cuser.uid + "/" + sendername + "/message_" + str(i),
+                              "rb") as message_file:
+                        ciphertext = pickle.load(message_file)
+                    with open("serverdata/messages/" + cuser.uid + "/" + sendername + "/header_" + str(i),
+                              "rb") as header_file:
+                        header = pickle.load(header_file)
+                    message = cuser.RatchetDecrypt(sendername, header, ciphertext, server.g , server.p).decode(encoding='UTF-8')
+                    print("From",sendername,":",message)
+                    os.makedirs("usersdata/messages/"+cuser.uid+"/"+sendername, exist_ok=True)
+                    with open("usersdata/messages/"+cuser.uid+"/"+sendername+"/message_"+str(len(listdir("usersdata/messages/"+cuser.uid+"/"+sendername))+1),"wb") as message_save :
+                        pickle.dump(message,message_save)
+                    os.remove("serverdata/messages/" + cuser.uid + "/" + sendername + "/message_" + str(i))
+                    os.remove("serverdata/messages/" + cuser.uid + "/" + sendername + "/header_" + str(i))
+            print("!!! End !!!")
+
+        #MENU
         print("Welcome "+cuser.uid+ ", please choose an option")
         print("1. Add a new contact")
         print("2. Accept contact requests")
         print("3. Read messages")
         print("4. Send messages")
         print("5. Quit")
-        print("9. Show shared Keys")
+        print("6. Refresh")
         choice = input("Enter your choice : ")
+
+        #Add new contact (X3DH initial message)
         if choice == "1":
             targetid=None
             while(server.verifyUserExistence(targetid)!=1) :
@@ -76,18 +92,47 @@ def loggedMenu(cuser):
             cuser.askContact(targetid, server.g, server.p)
             print("Request sent")
             pass
+
+        #Accept all contact requests (X3DH response message)
         elif choice == "2":
             cuser.acceptContacts(server.g, server.p)
             pass
-        elif choice == "9":
-            cuser.__str__()
+
+        #Read saved messages
+        elif choice == "3":
+            targetid = None
+            print("Available messages from :", listdir("usersdata/messages/"+cuser.uid))
+            while (server.verifyUserExistence(targetid) != 1):
+                targetid = input("Whose message do you want to read ? :")
+            print("Avaible messages from",targetid,":",listdir("usersdata/messages/"+cuser.uid+"/"+targetid))
+            msgnb = input("Enter the message number you want to read :")
+            with open("usersdata/messages/"+cuser.uid+"/"+targetid+"/message_"+msgnb,"rb") as message_file :
+                message = pickle.load(message_file)
+            print("Message_"+msgnb+" :",message)
+
+        #Send new message
+        elif choice == "4":
+            targetid = None
+            while (server.verifyUserExistence(targetid) != 1):
+                targetid = input("Who do you want to send your message to ?")
+            if not (exists("serverdata/messages/"+targetid+"/"+cuser.uid)) :
+                if not (exists("serverdata/messages/"+cuser.uid+"/"+targetid)) :
+                    cuser.ratchetInitFirst(targetid, server.g, server.p)
+            message = input("Enter your message : ")
+            plaintext = bytes(message, encoding='UTF-8')
+            cuser.RatchetEncrypt(targetid,plaintext)
+
+        #Quit
         elif choice == "5":
             break
+        #Refresh
+        elif choice == "6":
+            pass
         else :
             print("Invalid choice. Try again.")
 
 
-#Instancier le serveur
+#Instanciate server
 if exists("serverdata/server.object"):
     with open("serverdata/server.object", "rb") as server_object_file:
         server = pickle.load(server_object_file)

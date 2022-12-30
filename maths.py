@@ -1,7 +1,7 @@
 from Cryptodome.Util.number import getPrime, getRandomInteger, getRandomNBitInteger, inverse, long_to_bytes
 import hmac
 
-#Algorithme d'exponentiation rapide
+#Exponentiation by squaring
 def expRapide(a, exposant, modulo) :
     res = 1
     while(exposant>0) :
@@ -12,22 +12,20 @@ def expRapide(a, exposant, modulo) :
     return res
 
 def kdf_rk(rk, dh_out):
-    # Use HKDF to derive two new keys from the concatenated bytes
+    # Use HKDF to derive two new keys
     hkdf = hmac.HMAC(key=rk, msg=dh_out, digestmod='sha512')
     derived_key = hkdf.digest()
-    # Return the first 32 bytes as the root key and the second 32 bytes
-    # as the chain key
+    # Return the first 32 bytes as the root key and the second 32 bytes as the chain key
     return derived_key[:32], derived_key[32:64]
 
 def kdf_ck(ck):
-    # Use HKDF to derive a new key from the existing CK
-    # using a secure hash function (e.g. SHA-256)
+    # Use HKDF to derive two new key from the existing CK
     hkdf = hmac.HMAC(key=ck, msg=b'', digestmod='sha512')
-    # Return the first 32 bytes of the derived key as the new CK
+    # Return the first 32 bytes of the derived key as the new CK and the second 32 bytes as the message key
     derived_key = hkdf.digest()
     return derived_key[:32], derived_key[32:64]
 
-
+#Perform RC4 Encryption and Decryption
 def rc4(key, data):
     # Initialize the state with the key
     state = [i for i in range(256)]
@@ -54,6 +52,7 @@ def rc4(key, data):
 
     return bytes(output)
 
+#Generate new Diffie-Hellman key-pair
 def GENERATE_DH(g, p):
     privKey = getRandomInteger(2048)
     pubKey = expRapide(g, privKey, p)
@@ -64,13 +63,14 @@ def DH(priv, pub, p):
     sharedKey = expRapide(pub, priv, p)
     return sharedKey
 
+#Header class which contains Ratchet public key, previous number of messages and actual number of messages
 class Header():
     def __init__(self,dh_pair, pn, n):
         self.dh = dh_pair[1]
         self.pn = pn
         self.n = n
 
-
+#If the message corresponds to a skipped message key this function decrypts the message, deletes the message key, and returns.
 def TrySkippedMessageKeys(state, header, ciphertext):
     if (header.dh, header.n) in state.MKSKIPPED:
         mk = state.MKSKIPPED[header.dh, header.n]
@@ -88,6 +88,7 @@ def SkipMessageKeys(state, until):
             state.MKSKIPPED[state.DHr, state.Nr] = mk
             state.Nr += 1
 
+#Performs a symmetric-key ratchet step to derive the relevant message key and next chain key, and decrypts the message
 def DHRatchet(state, header,g , p):
     state.PN = state.Ns
     state.Ns = 0

@@ -6,14 +6,16 @@ from random import randint
 import os
 import pickle
 
+#State class as described and used in Signal's double ratchet documentation
 class State:
     def __init__(self, uid):
         self.uid = uid
         pass
 
-
+#A user class used to define users of the application. They carry their key-pairs and interract with the client and the server through their methods
 class User:
 
+    #User creation, keys needed for X3DH are created and published to the server
     def __init__(self, uid, g, p):
         self.uid = uid
         self.states = {}
@@ -22,10 +24,12 @@ class User:
         self.generateKeys(g, p)
         self.saveUser()
 
+    #Method which saves the user data on it's machine
     def saveUser(self):
         with open("usersdata/" + self.uid + ".object", "wb") as data_file:
             pickle.dump(self, data_file)
 
+    #Global method that generates the keys for X3DH
     def generateKeys(self, g, p):
         self.genereateIDKeys(g, p)
         self.generateSigPKeys(g, p)
@@ -37,14 +41,17 @@ class User:
         self.publishKeys()
         self.saveUser()
 
+    #Method that publishes the keys to the server
     def publishKeys(self):
         with open("serverdata/keys/"+self.uid+".keys","wb") as keys_file :
             keys = {"IDPUB" : self.idpublic_keyDH, "SIGPKPUB" : self.sigpublic_key, "SIG" : self.signature, "OTPK" : self.otPKeys, "PUBIDRSA" : self.idpublic_key, "RK" : self.ratchetKeys}
             pickle.dump(keys, keys_file)
 
+    #Ratchet public key generation
     def generateRatchetPublicKey(self, g, p, target):
         self.ratchetKeys[target] = GENERATE_DH(g, p)
 
+    #ID key-pairs generation
     def genereateIDKeys(self, g, pDH):
         #RSA Key Pair
         # Choose two large prime numbers
@@ -64,41 +71,48 @@ class User:
         # Construct the public and private keys
         self.idpublic_key = (n, e)
         self.idprivate_key = (n, d)
+        # Build DH key-pair from RSA private key
         self.idprivate_keyDH = d
         self.idpublic_keyDH = expRapide(g, self.idprivate_keyDH, pDH)
-        print("Clé ID généré")
+        print("Génération des clés")
 
+    #Signed Pre-Keys generation
     def generateSigPKeys(self, g, p):
         self.sigprivate_key = getRandomInteger(2048)
         self.sigpublic_key = expRapide(g, self.sigprivate_key, p)
-        print("Clé sig généré")
+        #print("Clé sig généré")
 
+    #Performs RSA with SHA-256 to sign pre-keys
     def signKeys(self):
         hashed_message = bytes_to_long(SHA256.new(long_to_bytes(self.sigpublic_key)).digest())
         signature = expRapide(hashed_message, self.idprivate_key[1], self.idprivate_key[0])
         self.signature = signature
 
+    #One-time pre-keys generation
     def generateOtPKeys(self, g, p):
         privotPKey = getRandomInteger(2048)
         pubotPKey = expRapide(g, privotPKey, p)
-        print("Clé OT généré")
+        #print("Clé OT généré")
         return (privotPKey, pubotPKey)
 
+    #Ephemeral keys generation
     def generateEphKey(self, g , p):
         self.privEphKey = getRandomInteger(2048)
         self.pubEphKey = expRapide(g, self.privEphKey, p)
-        print("Clé eph généré")
+        #print("Clé eph généré")
 
+    #Performs RSA signature verification
     def verifySig(self, pubSigKey, signature, pubIDKey):
         hashed_message = bytes_to_long(SHA256.new(long_to_bytes(pubSigKey)).digest())
         decrypted_sig = expRapide(signature, pubIDKey[1], pubIDKey[0])
         if(decrypted_sig==hashed_message):
-            print("Signature correcte")
+            #print("Signature correcte")
             return 1
         else:
-            print("Signature incorrecte")
+            #print("Signature incorrecte")
             return 0
 
+    #Performs X3DH Key Agreement / Key computing for initial message
     def computeFirstSharedKey(self, p, sigPK, idK, otPK):
         dh1 = expRapide(sigPK, self.idprivate_keyDH, p)
         dh2 = expRapide(idK, self.privEphKey, p)
@@ -106,6 +120,7 @@ class User:
         dh4 = expRapide(otPK, self.privEphKey, p)
         return int(str(dh1)+str(dh2)+str(dh3)+str(dh4))
 
+    # Performs X3DH Key Agreement / Key computing for response message
     def computeSecondSharedKey(self, p, idK, ephK, otid):
         dh1 = expRapide(idK, self.sigprivate_key, p)
         dh2 = expRapide(ephK, self.idprivate_keyDH, p)
@@ -113,6 +128,7 @@ class User:
         dh4 = expRapide(ephK, self.otPKeys[otid][0], p)
         return int(str(dh1)+str(dh2)+str(dh3)+str(dh4))
 
+    # Sends X3DH initial message and compute shared key
     def askContact(self, target, g, p):
         self.generateEphKey(g, p)
         chosenNb = randint(0,9)
@@ -125,7 +141,7 @@ class User:
         if(self.verifySig(targetKeys["SIGPKPUB"],targetKeys["SIG"],targetKeys["PUBIDRSA"])==1) :
             sk = self.computeFirstSharedKey(p, targetKeys["SIGPKPUB"], targetKeys["IDPUB"], targetKeys["OTPK"][chosenNb][1] )
             self.sharedKeys[target] = sk
-            print("Shared Key:", sk)
+            #print("Shared Key:", sk)
             os.makedirs(os.path.dirname("serverdata/contactRequests/"+target), exist_ok=True)
             #Save request for future confirmation
             with open("serverdata/contactRequests/"+target+"/"+self.uid+".ask","wb") as ask_file :
@@ -134,6 +150,7 @@ class User:
             print("Signatre incorrecte, abandon de la procédure")
         self.saveUser()
 
+    #Accept all X3DH initial messages and compute shared keys
     def acceptContacts(self, g, p):
         os.makedirs("serverdata/contactRequests/" + self.uid, exist_ok=True)
         reqdir = os.listdir("serverdata/contactRequests/"+self.uid)
@@ -151,13 +168,15 @@ class User:
                 if(self.verifySig(targetKeys["SIGPKPUB"],targetKeys["SIG"],targetKeys["PUBIDRSA"])==1) :
                     sk = self.computeSecondSharedKey(p, req["IDPUB"], req["EPHK"], req["OTID"])
                     self.sharedKeys[target] = sk
-                    print("Shared Key:", sk)
+                    #print("Shared Key:", sk)
                     os.remove("serverdata/contactRequests/"+self.uid+"/"+ask_filename)
                 else:
                     print("Signatre incorrecte, abandon de la procédure")
                 self.saveUser()
 
+    #Double Ratchet Initialisation for the one who's sending the first message
     def ratchetInitFirst(self, target, g, p):
+        os.makedirs("serverdata/messages/" + target + "/" + self.uid, exist_ok=True)
         SK = self.sharedKeys[target]
         self.states[target] = State(target)
         state = self.states[target]
@@ -171,8 +190,11 @@ class User:
         state.Nr = 0
         state.PN = 0
         state.MKSKIPPED = {}
+        self.saveUser()
 
+    # Double Ratchet Initialisation for the one receiving before sending the first message
     def ratchetInitSecond(self, target, g, p):
+        os.makedirs("serverdata/messages/" + target + "/" + self.uid, exist_ok=True)
         self.states[target] = State(target)
         SK = self.sharedKeys[target]
         state = self.states[target]
@@ -185,14 +207,23 @@ class User:
         state.Nr = 0
         state.PN = 0
         state.MKSKIPPED = {}
+        self.saveUser()
 
+    #Performs Double Ratchet message sending with RC4 encryption
     def RatchetEncrypt(self, target, plaintext):
         state = self.states[target]
         state.CKs, mk = kdf_ck(state.CKs)
         header = Header(state.DHs, state.PN, state.Ns)
         state.Ns += 1
-        return header, rc4(mk, plaintext)
-#changer plaintext et ciphertext
+        ciphertext = rc4(mk, plaintext)
+        with open("serverdata/messages/"+target+"/"+self.uid+"/message_"+str(state.Ns),"wb") as message_file :
+            pickle.dump(ciphertext,message_file)
+        with open("serverdata/messages/"+target+"/"+self.uid+"/header_"+str(state.Ns),"wb") as header_file :
+            pickle.dump(header,header_file)
+        self.saveUser()
+        return header, ciphertext
+
+    # Performs Double Ratchet message receiving with RC4 decryption
     def RatchetDecrypt(self, target, header, ciphertext,g , p):
         state = self.states[target]
         plaintext = TrySkippedMessageKeys(state, header, ciphertext)
@@ -204,7 +235,9 @@ class User:
         SkipMessageKeys(state, header.n)
         state.CKr, mk = kdf_ck(state.CKr)
         state.Nr += 1
-        return rc4(mk, ciphertext)
+        plaintext = rc4(mk, ciphertext)
+        self.saveUser()
+        return plaintext
 
 
     def __str__(self):
@@ -214,6 +247,7 @@ class User:
 
 class Server :
 
+    #Server object initialisation
     def __init__(self):
         self.name = "Server"
         self.chooseDHP()
@@ -222,6 +256,7 @@ class Server :
         with open("serverdata/server.object","wb") as server_object_file :
             pickle.dump(self, server_object_file)
 
+    #New user creation method
     def createUser(self, id):
         print("Creating new user ->", id,"<- ...")
         newUser = User(id, self.g, self.p)
@@ -230,11 +265,13 @@ class Server :
         f.close
         return newUser
 
+    #method user for user login
     def loadUser(self, id):
         with open("usersdata/" + id + ".object", "rb") as userdata_file:
             currentUser = pickle.load(userdata_file)
         return currentUser
 
+    #method which verify user existence
     def verifyUserExistence(self, id):
         f = open("serverdata/users.txt", "r")
         for line in f:
@@ -248,22 +285,3 @@ class Server :
 
     def __str__(self):
         print("This is", self.name, "the p parameter is p:",self.p)
-""""
-alice = User("alice")
-bob = User("bob")
-p = alice.chooseDHP()
-g = 5
-alice.genereateIDKeys(g, p)
-bob.genereateIDKeys(g, p)
-print("KEYS\n",alice.idprivate_keyDH,"\n", bob.idprivate_keyDH,"\n\n")
-alice.generateSigPKeys(g, p)
-bob.generateSigPKeys(g, p)
-alice.signKeys()
-alice.generateEphKeys(g, p)
-bob.generateEphKeys(g, p)
-alice.generateOtPKeys(g, p)
-bob.generateOtPKeys(g, p)
-bob.computeFirstSharedKey(p, alice.sigpublic_key, alice.idpublic_keyDH, alice.pubotPKey)
-alice.computeSecondSharedKey(p, bob.idpublic_keyDH, bob.pubEphKey)
-alice.verifySig(alice.sigpublic_key,alice.signature,alice.idpublic_key)
-"""
