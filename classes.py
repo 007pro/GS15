@@ -3,6 +3,7 @@ from Cryptodome.Hash import SHA256
 from maths import expRapide
 from os.path import exists
 from random import randint
+import os
 import pickle
 
 class User:
@@ -11,9 +12,11 @@ class User:
         self.uid = uid
         self.sharedKeys = {}
         self.generateKeys(g, p)
+        self.saveUser()
 
     def saveUser(self):
-        pass
+        with open("usersdata/" + self.uid + ".object", "wb") as data_file:
+            pickle.dump(self, data_file)
 
     def generateKeys(self, g, p):
         self.genereateIDKeys(g, p)
@@ -24,10 +27,11 @@ class User:
         for i in range(10) :
             self.otPKeys.append(self.generateOtPKeys(g, p))
         self.publishKeys()
+        self.saveUser()
 
     def publishKeys(self):
         with open("serverdata/keys/"+self.uid+".keys","wb") as keys_file :
-            keys = {"IDPUB" : self.idpublic_keyDH, "SIGPKPUB" : self.sigpublic_key, "SIG" : self.signature, "OTPK" : self.otPKeys}
+            keys = {"IDPUB" : self.idpublic_keyDH, "SIGPKPUB" : self.sigpublic_key, "SIG" : self.signature, "OTPK" : self.otPKeys, "PUBIDRSA" : self.idpublic_key}
             pickle.dump(keys, keys_file)
 
     def genereateIDKeys(self, g, pDH):
@@ -91,33 +95,56 @@ class User:
         dh4 = expRapide(otPK, self.privEphKey, p)
         return int(str(dh1)+str(dh2)+str(dh3)+str(dh4))
 
-    def computeSecondSharedKey(self, p, idK, ephK):
+    def computeSecondSharedKey(self, p, idK, ephK, otid):
         dh1 = expRapide(idK, self.sigprivate_key, p)
         dh2 = expRapide(ephK, self.idprivate_keyDH, p)
         dh3 = expRapide(ephK, self.sigprivate_key, p)
-        dh4 = expRapide(ephK, self.privotPKey, p)
-        print(dh1,dh2,dh3,dh4,"\n end second")
+        dh4 = expRapide(ephK, self.otPKeys[otid][0], p)
+        return int(str(dh1)+str(dh2)+str(dh3)+str(dh4))
 
     def askContact(self, target, g, p):
         self.generateEphKey(g, p)
         chosenNb = randint(0,9)
-        req = {"IDPUB": self.idpublic_key, "EPHK": self.pubEphKey, "OTID": chosenNb}
+        req = {"IDPUB": self.idpublic_keyDH, "EPHK": self.pubEphKey, "OTID": chosenNb, "IDPUBRSA" : self.idpublic_key}
         with open("serverdata/keys/"+target+".keys","rb") as key_file:
             targetKeys = pickle.load(key_file)
-        if(self.verifySig(targetKeys["SIGPKPUB"],targetKeys["SIG"],targetKeys["IDPUB"])==1) :
+        #Verify signature
+        if(self.verifySig(targetKeys["SIGPKPUB"],targetKeys["SIG"],targetKeys["PUBIDRSA"])==1) :
             sk = self.computeFirstSharedKey(p, targetKeys["SIGPKPUB"], targetKeys["IDPUB"], targetKeys["OTPK"][chosenNb][1] )
             self.sharedKeys[target] = sk
-            with open("serverdata/keys/"+target+"/"+self.uid+".ask","wb") as ask_file :
+            print("Shared Key:", sk)
+            os.makedirs(os.path.dirname("serverdata/contactRequests/"+target), exist_ok=True)
+            #Save request for future confirmation
+            with open("serverdata/contactRequests/"+target+"/"+self.uid+".ask","wb") as ask_file :
                 pickle.dump(req, ask_file)
         else :
             print("Signatre incorrecte, abandon de la procédure")
+        self.saveUser()
 
-    def acceptContact(self):
-        #A FAIRE
-        pass
+    def acceptContacts(self, g, p):
+        os.makedirs("serverdata/contactRequests/" + self.uid, exist_ok=True)
+        reqdir = os.listdir("serverdata/contactRequests/"+self.uid)
+        if len(reqdir) == 0:
+            print("No contact requests")
+        else:
+            for ask_filename in reqdir :
+                target = ask_filename.rstrip(".ask")
+                with open("serverdata/contactRequests/"+self.uid+"/"+ask_filename,"rb") as ask_file :
+                    req = pickle.load(ask_file)
+                with open("serverdata/keys/" + target + ".keys", "rb") as key_file:
+                    targetKeys = pickle.load(key_file)
+                if(self.verifySig(targetKeys["SIGPKPUB"],targetKeys["SIG"],targetKeys["PUBIDRSA"])==1) :
+                    sk = self.computeSecondSharedKey(p, req["IDPUB"], req["EPHK"], req["OTID"])
+                    self.sharedKeys[target] = sk
+                    print("Shared Key:", sk)
+                    os.remove("serverdata/contactRequests/"+self.uid+"/"+ask_filename)
+                else:
+                    print("Signatre incorrecte, abandon de la procédure")
+                self.saveUser()
 
     def __str__(self):
         print("This is user ", self.uid)
+        print("Shared Keys :", self.sharedKeys)
 
 
 class Server :
@@ -131,11 +158,6 @@ class Server :
             pickle.dump(self, server_object_file)
 
     def createUser(self, id):
-        f = open("serverdata/users.txt","r")
-        for line in f :
-            if line==id :
-                f.close()
-                return None
         print("Creating new user ->", id,"<- ...")
         newUser = User(id, self.g, self.p)
         f = open("serverdata/users.txt", "a")
@@ -143,10 +165,18 @@ class Server :
         f.close
         return newUser
 
-    def logUser(self, id):
-
+    def loadUser(self, id):
+        with open("usersdata/" + id + ".object", "rb") as userdata_file:
+            currentUser = pickle.load(userdata_file)
         return currentUser
 
+    def verifyUserExistence(self, id):
+        f = open("serverdata/users.txt", "r")
+        for line in f:
+            if line.rstrip('\n') == id:
+                f.close()
+                return 1
+        return 0
 
     def chooseDHP(self):
         self.p = getPrime(2048)
