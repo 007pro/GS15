@@ -8,6 +8,7 @@ def display_menu():
     print("2. Log in")
     print("3. List all users")
     print("4. Quit")
+    print("7. Test procedure")
 
 def main():
     while True:
@@ -38,6 +39,21 @@ def main():
                 print(line)
             f.close()
             pass
+        elif choice == "7":
+            alice = server.loadUser("alice")
+            bob = server.loadUser("bob")
+            alice.ratchetInitFirst("bob", server.g, server.p)
+            bob.ratchetInitSecond("alice", server.g, server.p)
+            header, ciphertext = alice.RatchetEncrypt("bob", b'Bonjour a tous')
+            header2, ciphertext2 = alice.RatchetEncrypt("bob", b'Bonjour a tou')
+            header3, ciphertext3 = alice.RatchetEncrypt("bob", b'Bonjour a to')
+            header4, ciphertext4 = alice.RatchetEncrypt("bob", b'Bonjour a t')
+            print(bob.RatchetDecrypt("alice",header,ciphertext, server.g, server.p))
+            print(bob.RatchetDecrypt("alice", header2, ciphertext2, server.g, server.p))
+            print(bob.RatchetDecrypt("alice", header3, ciphertext3, server.g, server.p))
+            print(bob.RatchetDecrypt("alice", header4, ciphertext4, server.g, server.p))
+            header, ciphertext = bob.RatchetEncrypt("alice", b'Yo comment')
+            print(alice.RatchetDecrypt("bob",header,ciphertext, server.g, server.p))
         elif choice == "4":
             break
         else:

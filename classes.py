@@ -1,16 +1,24 @@
 from Cryptodome.Util.number import getPrime, getRandomInteger, getRandomNBitInteger, inverse, long_to_bytes, bytes_to_long
 from Cryptodome.Hash import SHA256
-from maths import expRapide
+from maths import expRapide, GENERATE_DH, DH, kdf_rk, kdf_ck, Header, rc4, TrySkippedMessageKeys, SkipMessageKeys, DHRatchet
 from os.path import exists
 from random import randint
 import os
 import pickle
 
+class State:
+    def __init__(self, uid):
+        self.uid = uid
+        pass
+
+
 class User:
 
     def __init__(self, uid, g, p):
         self.uid = uid
+        self.states = {}
         self.sharedKeys = {}
+        self.ratchetKeys = {}
         self.generateKeys(g, p)
         self.saveUser()
 
@@ -31,8 +39,11 @@ class User:
 
     def publishKeys(self):
         with open("serverdata/keys/"+self.uid+".keys","wb") as keys_file :
-            keys = {"IDPUB" : self.idpublic_keyDH, "SIGPKPUB" : self.sigpublic_key, "SIG" : self.signature, "OTPK" : self.otPKeys, "PUBIDRSA" : self.idpublic_key}
+            keys = {"IDPUB" : self.idpublic_keyDH, "SIGPKPUB" : self.sigpublic_key, "SIG" : self.signature, "OTPK" : self.otPKeys, "PUBIDRSA" : self.idpublic_key, "RK" : self.ratchetKeys}
             pickle.dump(keys, keys_file)
+
+    def generateRatchetPublicKey(self, g, p, target):
+        self.ratchetKeys[target] = GENERATE_DH(g, p)
 
     def genereateIDKeys(self, g, pDH):
         #RSA Key Pair
@@ -105,6 +116,8 @@ class User:
     def askContact(self, target, g, p):
         self.generateEphKey(g, p)
         chosenNb = randint(0,9)
+        self.generateRatchetPublicKey(g, p, target)
+        self.publishKeys()
         req = {"IDPUB": self.idpublic_keyDH, "EPHK": self.pubEphKey, "OTID": chosenNb, "IDPUBRSA" : self.idpublic_key}
         with open("serverdata/keys/"+target+".keys","rb") as key_file:
             targetKeys = pickle.load(key_file)
@@ -129,6 +142,8 @@ class User:
         else:
             for ask_filename in reqdir :
                 target = ask_filename.rstrip(".ask")
+                self.generateRatchetPublicKey(g, p, target)
+                self.publishKeys()
                 with open("serverdata/contactRequests/"+self.uid+"/"+ask_filename,"rb") as ask_file :
                     req = pickle.load(ask_file)
                 with open("serverdata/keys/" + target + ".keys", "rb") as key_file:
@@ -141,6 +156,56 @@ class User:
                 else:
                     print("Signatre incorrecte, abandon de la procédure")
                 self.saveUser()
+
+    def ratchetInitFirst(self, target, g, p):
+        SK = self.sharedKeys[target]
+        self.states[target] = State(target)
+        state = self.states[target]
+        with open("serverdata/keys/"+target+".keys","rb") as key_file:
+            targetKeys = pickle.load(key_file)
+        state.DHs = GENERATE_DH(g, p)
+        state.DHr = targetKeys["RK"][self.uid][1]
+        state.RK, state.CKs = kdf_rk(long_to_bytes(SK), long_to_bytes(DH(state.DHs[0], state.DHr,p)))
+        state.CKr = None
+        state.Ns = 0
+        state.Nr = 0
+        state.PN = 0
+        state.MKSKIPPED = {}
+
+    def ratchetInitSecond(self, target, g, p):
+        self.states[target] = State(target)
+        SK = self.sharedKeys[target]
+        state = self.states[target]
+        state.DHs = self.ratchetKeys[target]
+        state.DHr = None
+        state.RK = long_to_bytes(SK)
+        state.CKs = None
+        state.CKr = None
+        state.Ns = 0
+        state.Nr = 0
+        state.PN = 0
+        state.MKSKIPPED = {}
+
+    def RatchetEncrypt(self, target, plaintext):
+        state = self.states[target]
+        state.CKs, mk = kdf_ck(state.CKs)
+        header = Header(state.DHs, state.PN, state.Ns)
+        state.Ns += 1
+        return header, rc4(mk, plaintext)
+#changer plaintext et ciphertext
+    def RatchetDecrypt(self, target, header, ciphertext,g , p):
+        state = self.states[target]
+        plaintext = TrySkippedMessageKeys(state, header, ciphertext)
+        if plaintext != None:
+            return plaintext
+        if header.dh != state.DHr:
+            SkipMessageKeys(state, header.pn)
+            DHRatchet(state, header,g, p)
+        SkipMessageKeys(state, header.n)
+        state.CKr, mk = kdf_ck(state.CKr)
+        state.Nr += 1
+        return rc4(mk, ciphertext)
+
 
     def __str__(self):
         print("This is user ", self.uid)
