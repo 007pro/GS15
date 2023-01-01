@@ -10,7 +10,7 @@ def display_menu():
     print("1. Create new user")
     print("2. Log in")
     print("3. List all users")
-    print("4. Quit")
+    print("5. Quit")
 
 def main():
     while True:
@@ -42,13 +42,15 @@ def main():
             f.close()
 
         #Quit
-        elif choice == "4":
+        elif choice == "5":
             break
         else:
             print("Invalid choice. Try again.")
 
 def loggedMenu(cuser):
     while True:
+        # Accept all contact requests (X3DH response message)
+        cuser.acceptContacts(server.g, server.p)
         #Load all new messages on connection
         if(exists("serverdata/messages/"+cuser.uid)) :
             print("!!! New messages !!!")
@@ -65,11 +67,20 @@ def loggedMenu(cuser):
                     with open("serverdata/messages/" + cuser.uid + "/" + sendername + "/header_" + str(i),
                               "rb") as header_file:
                         header = pickle.load(header_file)
-                    message = cuser.RatchetDecrypt(sendername, header, ciphertext, server.g , server.p).decode(encoding='UTF-8')
-                    print("From",sendername,":",message)
-                    os.makedirs("usersdata/messages/"+cuser.uid+"/"+sendername, exist_ok=True)
-                    with open("usersdata/messages/"+cuser.uid+"/"+sendername+"/message_"+str(len(listdir("usersdata/messages/"+cuser.uid+"/"+sendername))+1),"wb") as message_save :
-                        pickle.dump(message,message_save)
+                    #If it's a text massage
+                    if(header.iv == None) :
+                        message = cuser.RatchetDecrypt(sendername, header, ciphertext, server.g , server.p).decode(encoding='UTF-8')
+                        print("From",sendername,":",message)
+                        os.makedirs("usersdata/messages/"+cuser.uid+"/"+sendername, exist_ok=True)
+                        with open("usersdata/messages/"+cuser.uid+"/"+sendername+"/message_"+str(len(listdir("usersdata/messages/"+cuser.uid+"/"+sendername))+1),"wb") as message_save :
+                            pickle.dump(message,message_save)
+                    #If it's a file
+                    else :
+                        message = cuser.RatchetDecryptAES(sendername, header, ciphertext, server.g, server.p)
+                        print("From", sendername, ":", header.filename)
+                        os.makedirs("usersdata/messages/" + cuser.uid + "/" + sendername, exist_ok=True)
+                        with open("usersdata/messages/" + cuser.uid + "/" + sendername + "/" + header.filename,"wb") as message_save:
+                            message_save.write(message)
                     os.remove("serverdata/messages/" + cuser.uid + "/" + sendername + "/message_" + str(i))
                     os.remove("serverdata/messages/" + cuser.uid + "/" + sendername + "/header_" + str(i))
             print("!!! End !!!")
@@ -77,7 +88,7 @@ def loggedMenu(cuser):
         #MENU
         print("Welcome "+cuser.uid+ ", please choose an option")
         print("1. Add a new contact")
-        print("2. Accept contact requests")
+        print("2. Send File")
         print("3. Read messages")
         print("4. Send messages")
         print("5. Quit")
@@ -93,10 +104,22 @@ def loggedMenu(cuser):
             print("Request sent")
             pass
 
-        #Accept all contact requests (X3DH response message)
+        #Send file to someone
         elif choice == "2":
-            cuser.acceptContacts(server.g, server.p)
-            pass
+            targetid = None
+            while (server.verifyUserExistence(targetid) != 1):
+                targetid = input("Who do you want to send your file to ?")
+            if not (exists("serverdata/messages/" + targetid + "/" + cuser.uid)):
+                if not (exists("serverdata/messages/" + cuser.uid + "/" + targetid)):
+                    cuser.ratchetInitFirst(targetid, server.g, server.p)
+            fileExists = False
+            while not (fileExists) :
+                filepath = input("Enter filepath : ")
+                fileExists = exists(filepath)
+            with open(filepath, "rb") as file :
+                plaintext = file.read()
+            filename = os.path.basename(filepath)
+            cuser.RatchetEncryptAES(targetid, plaintext, filename)
 
         #Read saved messages
         elif choice == "3":
@@ -136,10 +159,8 @@ def loggedMenu(cuser):
 if exists("serverdata/server.object"):
     with open("serverdata/server.object", "rb") as server_object_file:
         server = pickle.load(server_object_file)
-        server.__str__()
 else :
     server = Server()
-    server.__str__()
 
 if __name__ == "__main__":
     main()

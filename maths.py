@@ -11,6 +11,12 @@ def expRapide(a, exposant, modulo) :
         a = (a*a)%modulo
     return res
 
+def kdf_sk(sk):
+    #Use HKDF to derive the Shared Key into a 32 bytes shared key
+    hkdf = hmac.HMAC(key=sk, msg=b'', digestmod='sha256')
+    derived_key = hkdf.digest()
+    return derived_key[:32]
+
 def kdf_rk(rk, dh_out):
     # Use HKDF to derive two new keys
     hkdf = hmac.HMAC(key=rk, msg=dh_out, digestmod='sha512')

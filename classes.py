@@ -1,6 +1,7 @@
 from Cryptodome.Util.number import getPrime, getRandomInteger, getRandomNBitInteger, inverse, long_to_bytes, bytes_to_long
-from Cryptodome.Hash import SHA256
-from maths import expRapide, GENERATE_DH, DH, kdf_rk, kdf_ck, Header, rc4, TrySkippedMessageKeys, SkipMessageKeys, DHRatchet
+from sha256 import sha256
+from aes import aes_decrypt,aes_encrypt
+from maths import expRapide, GENERATE_DH, DH, kdf_rk, kdf_ck, Header, rc4, TrySkippedMessageKeys, SkipMessageKeys, DHRatchet, kdf_sk
 from os.path import exists
 from random import randint
 import os
@@ -74,7 +75,7 @@ class User:
         # Build DH key-pair from RSA private key
         self.idprivate_keyDH = d
         self.idpublic_keyDH = expRapide(g, self.idprivate_keyDH, pDH)
-        print("Génération des clés")
+        print("Generating keys")
 
     #Signed Pre-Keys generation
     def generateSigPKeys(self, g, p):
@@ -84,7 +85,7 @@ class User:
 
     #Performs RSA with SHA-256 to sign pre-keys
     def signKeys(self):
-        hashed_message = bytes_to_long(SHA256.new(long_to_bytes(self.sigpublic_key)).digest())
+        hashed_message = bytes_to_long(sha256(long_to_bytes(self.sigpublic_key)))
         signature = expRapide(hashed_message, self.idprivate_key[1], self.idprivate_key[0])
         self.signature = signature
 
@@ -103,7 +104,7 @@ class User:
 
     #Performs RSA signature verification
     def verifySig(self, pubSigKey, signature, pubIDKey):
-        hashed_message = bytes_to_long(SHA256.new(long_to_bytes(pubSigKey)).digest())
+        hashed_message = bytes_to_long(sha256(long_to_bytes(pubSigKey)))
         decrypted_sig = expRapide(signature, pubIDKey[1], pubIDKey[0])
         if(decrypted_sig==hashed_message):
             #print("Signature correcte")
@@ -140,14 +141,15 @@ class User:
         #Verify signature
         if(self.verifySig(targetKeys["SIGPKPUB"],targetKeys["SIG"],targetKeys["PUBIDRSA"])==1) :
             sk = self.computeFirstSharedKey(p, targetKeys["SIGPKPUB"], targetKeys["IDPUB"], targetKeys["OTPK"][chosenNb][1] )
+            sk = kdf_sk(long_to_bytes(sk))
             self.sharedKeys[target] = sk
             #print("Shared Key:", sk)
-            os.makedirs(os.path.dirname("serverdata/contactRequests/"+target), exist_ok=True)
+            os.makedirs("serverdata/contactRequests/"+target, exist_ok=True)
             #Save request for future confirmation
             with open("serverdata/contactRequests/"+target+"/"+self.uid+".ask","wb") as ask_file :
                 pickle.dump(req, ask_file)
         else :
-            print("Signatre incorrecte, abandon de la procédure")
+            print("Incorrect signature")
         self.saveUser()
 
     #Accept all X3DH initial messages and compute shared keys
@@ -167,11 +169,13 @@ class User:
                     targetKeys = pickle.load(key_file)
                 if(self.verifySig(targetKeys["SIGPKPUB"],targetKeys["SIG"],targetKeys["PUBIDRSA"])==1) :
                     sk = self.computeSecondSharedKey(p, req["IDPUB"], req["EPHK"], req["OTID"])
+                    sk = kdf_sk(long_to_bytes(sk))
                     self.sharedKeys[target] = sk
                     #print("Shared Key:", sk)
                     os.remove("serverdata/contactRequests/"+self.uid+"/"+ask_filename)
+                    print("Accepted "+target+"'s request")
                 else:
-                    print("Signatre incorrecte, abandon de la procédure")
+                    print("Incorrect signature")
                 self.saveUser()
 
     #Double Ratchet Initialisation for the one who's sending the first message
@@ -184,7 +188,7 @@ class User:
             targetKeys = pickle.load(key_file)
         state.DHs = GENERATE_DH(g, p)
         state.DHr = targetKeys["RK"][self.uid][1]
-        state.RK, state.CKs = kdf_rk(long_to_bytes(SK), long_to_bytes(DH(state.DHs[0], state.DHr,p)))
+        state.RK, state.CKs = kdf_rk(SK, long_to_bytes(DH(state.DHs[0], state.DHr,p)))
         state.CKr = None
         state.Ns = 0
         state.Nr = 0
@@ -200,7 +204,7 @@ class User:
         state = self.states[target]
         state.DHs = self.ratchetKeys[target]
         state.DHr = None
-        state.RK = long_to_bytes(SK)
+        state.RK = SK
         state.CKs = None
         state.CKr = None
         state.Ns = 0
@@ -236,6 +240,41 @@ class User:
         state.CKr, mk = kdf_ck(state.CKr)
         state.Nr += 1
         plaintext = rc4(mk, ciphertext)
+        self.saveUser()
+        return plaintext
+
+    # Performs Double Ratchet message sending with AES encryption
+    def RatchetEncryptAES(self, target, plaintext, filename):
+        state = self.states[target]
+        state.CKs, mk = kdf_ck(state.CKs)
+        iv = os.urandom(16)
+        header = Header(state.DHs, state.PN, state.Ns)
+        header.filename = filename
+        header.iv = iv
+        state.Ns += 1
+        ciphertext = aes_encrypt(plaintext, mk, iv)
+        with open("serverdata/messages/" + target + "/" + self.uid + "/message_" + str(state.Ns),
+                  "wb") as message_file:
+            pickle.dump(ciphertext, message_file)
+        with open("serverdata/messages/" + target + "/" + self.uid + "/header_" + str(state.Ns),
+                  "wb") as header_file:
+            pickle.dump(header, header_file)
+        self.saveUser()
+        return header, ciphertext
+
+    # Performs Double Ratchet message receiving with AES decryption
+    def RatchetDecryptAES(self, target, header, ciphertext, g, p):
+        state = self.states[target]
+        plaintext = TrySkippedMessageKeys(state, header, ciphertext)
+        if plaintext != None:
+            return plaintext
+        if header.dh != state.DHr:
+            SkipMessageKeys(state, header.pn)
+            DHRatchet(state, header, g, p)
+        SkipMessageKeys(state, header.n)
+        state.CKr, mk = kdf_ck(state.CKr)
+        state.Nr += 1
+        plaintext = aes_decrypt(ciphertext, mk, header.iv)
         self.saveUser()
         return plaintext
 
