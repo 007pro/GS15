@@ -1,6 +1,11 @@
-import os
+'''
+THIS IS THE MAIN FILE, YOU CAN LAUNCH THE APPLICATION FROM HERE
+'''
 
+import os
+#Import main objects that simulates users and servers
 from classes import User, Server
+#Utility functions for file manipulation
 from os.path import exists
 from os import listdir
 import pickle

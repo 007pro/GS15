@@ -1,7 +1,15 @@
+'''
+THIS FILE DEFINES main objects that simulates users and servers
+'''
+#Library import for secure PRNG, and other utility functions
 from Cryptodome.Util.number import getPrime, getRandomInteger, getRandomNBitInteger, inverse, long_to_bytes, bytes_to_long
+#Handcrafted SHA256 in sha256.py
 from sha256 import sha256
+#Import AES-256 encryption functions from aes.py, it uses AES from Cryptodome library
 from aes import aes_decrypt,aes_encrypt
+#Handcrafted functions import from maths.py - Handcrafted RC4, Signal's double ratchet function, handcrafted exponentiation by squaring and handcrafted diffie-hellman
 from maths import expRapide, GENERATE_DH, DH, kdf_rk, kdf_ck, Header, rc4, TrySkippedMessageKeys, SkipMessageKeys, DHRatchet, kdf_sk
+#Other utility imports for file manipulation
 from os.path import exists
 from random import randint
 import os
@@ -304,7 +312,7 @@ class Server :
         f.close
         return newUser
 
-    #method user for user login
+    #method used for user login
     def loadUser(self, id):
         with open("usersdata/" + id + ".object", "rb") as userdata_file:
             currentUser = pickle.load(userdata_file)

@@ -1,3 +1,6 @@
+'''
+THIS FILE IS FILED WITH Handcrafted functions
+'''
 from Cryptodome.Util.number import getPrime, getRandomInteger, getRandomNBitInteger, inverse, long_to_bytes
 import hmac
 

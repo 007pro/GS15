@@ -1,3 +1,6 @@
+'''
+HANDCRAFTED SHA256
+'''
 import struct
 
 def sha256(data):
